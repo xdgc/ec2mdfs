@@ -39,7 +39,15 @@ import urllib
 import re
 import posix
 
-import fuse
+try:
+	import fuse
+
+except ImportError:
+	print >>sys.stderr, \
+	      'ERROR: This FUSE filesystem requires the FUSE/Python bindings. Various package'
+	print >>sys.stderr, \
+	      'distributions sometimes call this "python-fuse" or "fuse-python".'
+	sys.exit(4)
 
 fuse.fuse_python_api = (0, 2)
 

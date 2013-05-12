@@ -1,6 +1,8 @@
 A FUSE filesystem for reflecting Amazon EC2 instance metadata (provided
 via HTTP) into the VFS.
 
+dependencies: FUSE/Python bindings ("python-fuse" or "fuse-python")
+
 usage: ec2mdfs [-o subtree=path] /mountpoint
 
 The subtree tells the filesystem what path under the EC2 metadata HTTP
