@@ -1,0 +1,227 @@
+#!/usr/bin/env python
+#
+# A FUSE filesystem for reflecting Amazon EC2 instance metadata (provided
+# via HTTP) into the VFS.
+#
+# usage: ec2mdfs [-o subtree=path] /mountpoint
+# 
+# The subtree tells the filesystem what path under the EC2 metadata HTTP
+# service should be reflected at the mountpoint.  The subtree specifies
+# an API version number, as well as allowing you to reflect only part of
+# the metadata.  The default is "/latest", which gives the following:
+#   $ ./ec2mdfs /ec2
+#   $ ls -lF /ec2
+#   total 0
+#   dr-xr-xr-x 2 root root 0 2013-05-12 15:09 dynamic/
+#   dr-xr-xr-x 2 root root 0 2013-05-12 15:09 meta-data/
+#
+# You can isolate only the instance metadata with an alternate subtree:
+#   $ ./ec2mdfs -osubtree=/latest/meta-data /ec2
+#   $ ls -F /ec2
+#   ami-id                 instance-id     metrics/         public-keys/
+#   ami-launch-index       instance-type   network/         reservation-id
+#   ami-manifest-path      kernel-id       placement/       security-groups
+#   block-device-mapping/  local-hostname  profile
+#   hostname               local-ipv4      public-hostname
+#   instance-action        mac             public-ipv4
+#
+# ec2msfs may be used as an alternative to calling out to `curl` for instance
+# metadata.
+#
+
+import os
+import sys
+import errno
+import time
+import syslog
+import stat
+import urllib
+import re
+
+import fuse
+
+fuse.fuse_python_api = (0, 2)
+
+baseURL = 'http://169.254.169.254/'
+
+class PhantomObjectError(Exception): pass
+
+class ec2stat(fuse.Stat):
+	def __init__(self):
+		self.st_mode = stat.S_IFREG | 0444
+		self.st_ino = 0
+		self.st_dev = 0
+		self.st_nlink = 1
+		self.st_uid = 0
+		self.st_gid = 0
+		self.st_size = 0
+		self.st_atime = 0
+		self.st_mtime = 0
+		self.st_ctime = 0
+
+
+class httpfs(dict):
+	coercions = [
+		# some paths indicated by the metadata server as files are really
+		# directories:
+		[re.compile(r'(/[^/]+/[^/]*)$'), r'\1/'],
+
+		# a=b paths are inline annotations. The real path is
+		# a, while b is a comment.
+		# XXX for right now let's leave this as special code below
+		[re.compile(r'(.*)/([^/=]+)(=[^/]+)/?$'), r'\1/\2/'],
+	]
+
+	def __init__(self, baseurl, delete=lambda: True):
+		self.base = baseurl
+		self.delete = delete
+		self.data = None
+
+		if baseurl.endswith('/'):
+			self.dir = True
+			self.update()
+		else:
+			self.dir = False
+
+	def update(self):
+		opener = urllib.URLopener()
+		try:
+			fp = opener.open(self.base)
+		except IOError, e:
+			if e.args[1] == 404:
+				try:
+					self.delete()
+				except KeyError:
+					raise PhantomObjectError
+			raise
+
+		if self.dir:
+			for line in fp:
+				ent = line.strip()
+
+				nexturl = self.base + ent
+				method, hostpath = urllib.splittype(nexturl)
+				host, path = urllib.splithost(hostpath)
+
+				# translate certain patterns.
+				for regex, repl in self.coercions:
+					if regex.match(path):
+						path = regex.sub(repl, path)
+						nexturl = method + '://' + host + path
+						break
+
+				ent = ent.rstrip('/')
+				def delete():
+					syslog.syslog(syslog.LOG_DEBUG, 'deleting %s from %s' % (ent, str(self)))
+					del self[ent]
+				try:
+					if nexturl.endswith('/'):
+						nexturl = nexturl.rstrip('/')
+						self[ent] = self.__class__(nexturl + '/', delete=delete)
+					else:
+						self[ent] = self.__class__(nexturl, delete=delete)
+				except PhantomObjectError:
+					pass
+			fp.close()
+
+		else:
+			self.data = fp.read()
+			fp.close()
+			return self.data
+
+
+class ec2mdfs(fuse.Fuse):
+	'''Amazon EC2 metadata filesystem (FUSE).'''
+
+	def __init__(self, *args, **kw):
+		self.subtree = '/latest'
+		self.fs = None
+
+		syslog.openlog(os.path.basename(sys.argv[0]), syslog.LOG_NDELAY, syslog.LOG_DAEMON)
+		fuse.Fuse.__init__(self, *args, **kw)
+		self.debug('Init complete.')
+
+	def debug(self, *msgs):
+		syslog.syslog(syslog.LOG_DEBUG, str(time.time()) + ': ' + ' '.join(msgs))
+
+	def precache(self):
+		awsurl = baseURL.rstrip('/') + '/' + self.subtree.strip('/') + '/'
+		self.debug(awsurl)
+		self.fs = httpfs(awsurl)
+		self.debug(str(self.fs))
+
+	def __getattr__(self, key):
+		self.debug('--- %s' % key)
+		raise AttributeError
+
+	def _isdir(self, node):
+		return node.dir
+
+	def resolvepath(self, path):
+		paths = filter(lambda x: x != '',
+		               os.path.normpath(path).split('/'))
+		node = self.fs
+		for elem in paths:
+			node = node[elem]
+		return node
+
+
+	def getattr(self, path):
+		self.debug('*** getattr', path)
+
+		t = int(time.time())
+		s = ec2stat()
+		try:
+			node = self.resolvepath(path)
+		except KeyError:
+			return -errno.ENOENT
+		if self._isdir(node):
+			s.st_mode = stat.S_IFDIR | 0555
+			s.st_nlink = 2
+		else:
+			node.update()
+			s.st_size = len(node.data)
+		s.st_atime = s.st_mtime = s.st_ctime = t
+		return s
+
+
+	def readdir(self, path, offset):
+		node = self.resolvepath(path)
+		rset = node.keys()
+		if self._isdir(node):
+			rset = ['.', '..'] + rset
+		for r in rset:
+			yield fuse.Direntry(r)
+
+
+	def open(self, path, flags):
+		self.debug('*** open %s %d' % (path, flags))
+		if flags & (os.O_WRONLY | os.O_RDWR):
+			return -errno.EACCES
+
+
+	def read(self, path, size, off):
+		node = self.resolvepath(path)
+		self.debug('*** read %s %d %d' % (path, size, off))
+		if self._isdir(node):
+			return -errno.EACCES
+		if size:
+			data = node.data[off:off+size]
+		else:
+			data = node.data[off:]
+		self.debug('=== ' + data)
+		return data
+
+
+def main():
+	fs = ec2mdfs(dash_s_do='setsingle')
+	fs.parser.add_option(mountopt='subtree', metavar='PATH',
+	                     default='/latest',
+	                     help='AWS metadata URL path (/latest)')
+	fs.parse(values=fs, errex=1)
+	fs.precache()
+	fs.main()
+
+
+if __name__ == '__main__':
+	sys.exit(main())

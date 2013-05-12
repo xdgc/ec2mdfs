@@ -1,0 +1,28 @@
+A FUSE filesystem for reflecting Amazon EC2 instance metadata (provided
+via HTTP) into the VFS.
+
+usage: ec2mdfs [-o subtree=path] /mountpoint
+
+The subtree tells the filesystem what path under the EC2 metadata HTTP
+service should be reflected at the mountpoint.  The subtree specifies
+an API version number, as well as allowing you to reflect only part of
+the metadata.  The default is "/latest", which gives the following:
+  $ ./ec2mdfs /ec2
+  $ ls -lF /ec2
+  total 0
+  dr-xr-xr-x 2 root root 0 2013-05-12 15:09 dynamic/
+  dr-xr-xr-x 2 root root 0 2013-05-12 15:09 meta-data/
+
+You can isolate only the instance metadata with an alternate subtree:
+  $ ./ec2mdfs -osubtree=/latest/meta-data /ec2
+  $ ls -F /ec2
+  ami-id                 instance-id     metrics/         public-keys/
+  ami-launch-index       instance-type   network/         reservation-id
+  ami-manifest-path      kernel-id       placement/       security-groups
+  block-device-mapping/  local-hostname  profile
+  hostname               local-ipv4      public-hostname
+  instance-action        mac             public-ipv4
+
+ec2msfs may be used as an alternative to calling out to `curl` for instance
+metadata.
+
