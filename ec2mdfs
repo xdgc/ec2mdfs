@@ -37,6 +37,7 @@ import syslog
 import stat
 import urllib
 import re
+import posix
 
 import fuse
 
@@ -58,6 +59,24 @@ class ec2stat(fuse.Stat):
 		self.st_atime = 0
 		self.st_mtime = 0
 		self.st_ctime = 0
+
+
+class ec2statvfs(fuse.StatVfs):
+	def __init__(self):
+		fuse.StatVfs.__init__(self)
+		# posix.ST_RDONLY is a late arrival
+		if not hasattr(posix, 'ST_RDONLY'):
+			posix.ST_RDONLY = 1
+		self.f_flag = posix.ST_RDONLY
+		self.f_namemax = 256
+		self.f_bsize = 4096
+		self.f_frsize = 4096
+		self.f_blocks = 1
+		self.f_bfree = 0
+		self.f_bavail = 0
+		self.f_files = 0
+		self.f_ffree = 0
+		self.f_favail = 0
 
 
 class httpfs(dict):
@@ -211,6 +230,10 @@ class ec2mdfs(fuse.Fuse):
 			data = node.data[off:]
 		self.debug('=== ' + data)
 		return data
+
+	def statfs(self):
+		s = ec2statvfs()
+		return s
 
 
 def main():
