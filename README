@@ -28,3 +28,13 @@ You can isolate only the instance metadata with an alternate subtree:
 ec2msfs may be used as an alternative to calling out to `curl` for instance
 metadata.
 
+
+Here's a useful entry for /etc/fstab:
+ec2mdfs     /ec2    fuse    ro,allow_other     0 0
+
+Or, same thing while mounting the metadata directory (disregarding
+dynamic data and userdata):
+ec2mdfs     /ec2    fuse    ro,allow_other,subtree=/latest/meta-data     0 0
+
+The allow_other option makes a FUSE filesystem accessible to users other
+than the FUSE daemon owner (in this case, root).
