@@ -36,5 +36,8 @@ Or, same thing while mounting the metadata directory (disregarding
 dynamic data and userdata):
 ec2mdfs     /ec2    fuse    ro,allow_other,subtree=/latest/meta-data     0 0
 
+If ec2mdfs is installed in /usr/bin, then "mount /ec2" will work, and
+automatic mounts at system startup will mount /ec2 as well.
+
 The allow_other option makes a FUSE filesystem accessible to users other
 than the FUSE daemon owner (in this case, root).
